@@ -1,0 +1,19 @@
+{
+  "name": "lightning-loop",
+  "version": "0.1.0",
+  "description": "Local stateful debug loop with memory for coding agents",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:electron\"",
+    "dev:electron": "cd electron && npm run dev",
+    "dev:backend": "cd backend && python -m uvicorn lightning_loop.main:app --reload --port 8811",
+    "build": "npm run build:electron",
+    "build:electron": "cd electron && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
