@@ -151,7 +151,7 @@ class BackboardClient:
             logger.error(f"Error in send_message: {e}")
             raise
     
-    async def one_shot(self, prompt: str, system_prompt: str) -> str:
+    async def one_shot(self, prompt: str, system_prompt: str, model: str = None) -> str:
         """Send a one-shot query without memory."""
         logger.info("one_shot called")
         logger.debug(f"  Prompt length: {len(prompt)}")
@@ -159,6 +159,17 @@ class BackboardClient:
         if not self.is_configured:
             logger.error("Backboard API key not configured!")
             raise Exception("Backboard API key not configured")
+        
+        # Parse model override if provided (format: "provider/model")
+        use_model = self.model
+        use_provider = self.provider
+        if model:
+            parts = model.split("/", 1)
+            if len(parts) == 2:
+                use_provider, use_model = parts
+            else:
+                use_model = model
+            logger.info(f"  Using model override: {use_provider}/{use_model}")
         
         try:
             # Create fresh assistant and thread for one-shot
@@ -204,8 +215,8 @@ class BackboardClient:
                 "content": prompt,
                 "stream": "false",
                 "memory": "off",
-                "model": self.model,
-                "provider": self.provider,
+                "model": use_model,
+                "provider": use_provider,
             }
             
             logger.info(f"Sending one-shot message to {url}")

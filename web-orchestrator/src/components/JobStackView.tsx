@@ -33,14 +33,47 @@ interface JobStack {
 
 const API_BASE = 'http://localhost:8811';
 
+interface ModelOption {
+  id: string;
+  name: string;
+  provider: string;
+}
+
+async function fetchModels(): Promise<ModelOption[]> {
+  const response = await fetch(`${API_BASE}/api/jobs/models`);
+  if (!response.ok) return [];
+  const data = await response.json();
+  return data.models || [];
+}
+
+async function uploadDocument(file: File): Promise<{ thread_id: string; filename: string }> {
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  const response = await fetch(`${API_BASE}/api/jobs/documents/upload`, {
+    method: 'POST',
+    body: formData,
+  });
+  
+  if (!response.ok) throw new Error('Upload failed');
+  return response.json();
+}
+
 async function interpretRequest(
   userRequest: string,
-  verbosity: 'low' | 'medium' | 'high' = 'medium'
+  verbosity: 'low' | 'medium' | 'high' = 'medium',
+  model?: string,
+  threadId?: string
 ): Promise<JobStack> {
   const response = await fetch(`${API_BASE}/api/jobs/interpret`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_request: userRequest, verbosity }),
+    body: JSON.stringify({ 
+      user_request: userRequest, 
+      verbosity,
+      model: model || undefined,
+      thread_id: threadId || undefined,
+    }),
   });
   
   if (!response.ok) throw new Error(`Failed: ${response.status}`);
@@ -318,13 +351,48 @@ export function JobStackView({ initialPrompt = '' }: JobStackViewProps) {
   const [error, setError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   
-  // Auto-interpret if initialPrompt is provided
+  // Model selection
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>('');
+  
+  // Document upload
+  const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; threadId: string }>>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  
+  // Load available models on mount
+  useEffect(() => {
+    fetchModels().then(setModels);
+  }, []);
+  
+  // Pre-fill input if initialPrompt is provided (but don't auto-generate)
   useEffect(() => {
     if (initialPrompt && initialPrompt.trim()) {
       setInput(initialPrompt);
-      handleInterpretWithPrompt(initialPrompt);
+      // Don't auto-interpret - let user adjust settings first
     }
   }, [initialPrompt]);
+  
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    setIsUploading(true);
+    setError(null);
+    
+    try {
+      const result = await uploadDocument(file);
+      setUploadedFiles(prev => [...prev, { name: result.filename, threadId: result.thread_id }]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setIsUploading(false);
+      e.target.value = ''; // Reset input
+    }
+  };
+  
+  const removeFile = (index: number) => {
+    setUploadedFiles(prev => prev.filter((_, i) => i !== index));
+  };
   
   const handleInterpretWithPrompt = async (prompt: string) => {
     if (!prompt.trim()) return;
@@ -333,7 +401,9 @@ export function JobStackView({ initialPrompt = '' }: JobStackViewProps) {
     setError(null);
     
     try {
-      const result = await interpretRequest(prompt, verbosity);
+      // Use the latest uploaded file's thread if available
+      const threadId = uploadedFiles.length > 0 ? uploadedFiles[uploadedFiles.length - 1].threadId : undefined;
+      const result = await interpretRequest(prompt, verbosity, selectedModel || undefined, threadId);
       setJobStack(result);
       if (result.jobs.length > 0) {
         setExpandedJob(result.jobs[0].job_id);
@@ -436,6 +506,61 @@ export function JobStackView({ initialPrompt = '' }: JobStackViewProps) {
             className="w-full h-32 px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white placeholder-white/30 resize-none focus:outline-none focus:border-white/20"
             disabled={isLoading}
           />
+        </div>
+        
+        {/* Model selector */}
+        {models.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-white/40">Model:</span>
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="flex-1 px-3 py-1.5 bg-white/5 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-white/20 appearance-none cursor-pointer"
+              disabled={isLoading}
+            >
+              <option value="" className="bg-zinc-900">Default (Nova Micro)</option>
+              {models.map((m) => (
+                <option key={m.id} value={m.id} className="bg-zinc-900">
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        
+        {/* Document upload */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-white/40">Documents:</span>
+            <label className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-colors ${
+              isUploading ? 'bg-white/5 text-white/30' : 'bg-white/10 text-white/60 hover:text-white hover:bg-white/20'
+            }`}>
+              {isUploading ? 'Uploading...' : '+ Add file'}
+              <input
+                type="file"
+                onChange={handleFileUpload}
+                className="hidden"
+                accept=".pdf,.txt,.md,.doc,.docx"
+                disabled={isUploading || isLoading}
+              />
+            </label>
+          </div>
+          
+          {uploadedFiles.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {uploadedFiles.map((f, i) => (
+                <div key={i} className="flex items-center gap-1 px-2 py-1 bg-white/10 rounded text-xs text-white/70">
+                  <span>📄 {f.name}</span>
+                  <button
+                    onClick={() => removeFile(i)}
+                    className="text-white/40 hover:text-white/60 ml-1"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         
         {/* Verbosity selector */}

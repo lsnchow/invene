@@ -6,12 +6,14 @@ This is the core of "do A, do B, do C" → executable job specifications.
 import uuid
 import json
 import logging
+import httpx
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, Field
 
 from lightning_loop.backboard.client import backboard
+from lightning_loop.core.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -71,6 +73,8 @@ class InterpretRequest(BaseModel):
     user_request: str
     project_context: Optional[ProjectContext] = None
     verbosity: str = Field(default="medium", pattern="^(low|medium|high)$")
+    model: Optional[str] = None  # Override model for this request
+    thread_id: Optional[str] = None  # Thread with uploaded documents
 
 
 class InterpretResponse(BaseModel):
@@ -185,9 +189,11 @@ async def interpret_request(request: InterpretRequest):
     try:
         # Call Backboard for interpretation
         logger.info("[JobInterpreter] Calling Backboard LLM...")
+        logger.info(f"[JobInterpreter] Using model: {request.model or 'default'}")
         response = await backboard.one_shot(
             prompt=prompt,
             system_prompt="You are a precise job decomposition engine. Output only valid JSON.",
+            model=request.model,
         )
         
         logger.info(f"[JobInterpreter] Got response: {response[:200]}...")
@@ -473,3 +479,97 @@ async def get_confirmed_jobs():
     logger.info(f"[Confirm] Electron picked up {len(jobs.get('jobs', []))} jobs")
     
     return {"has_jobs": True, "job_stack": jobs}
+
+
+# ============================================================================
+# Models API
+# ============================================================================
+
+# Curated list of good models for job interpretation
+AVAILABLE_MODELS = [
+    {"id": "anthropic/claude-sonnet-4-20250514", "name": "Claude Sonnet 4", "provider": "anthropic"},
+    {"id": "anthropic/claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "provider": "anthropic"},
+    {"id": "openai/gpt-4o", "name": "GPT-4o", "provider": "openai"},
+    {"id": "openai/gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai"},
+    {"id": "google/gemini-2.0-flash", "name": "Gemini 2.0 Flash", "provider": "google"},
+    {"id": "amazon/nova-micro-v1", "name": "Nova Micro", "provider": "amazon"},
+]
+
+
+@router.get("/models")
+async def get_models():
+    """Get available models for job interpretation."""
+    return {"models": AVAILABLE_MODELS}
+
+
+# ============================================================================
+# Document Upload API
+# ============================================================================
+
+# Store thread IDs with uploaded documents
+_document_threads: Dict[str, str] = {}
+
+
+@router.post("/documents/upload")
+async def upload_document(file: UploadFile = File(...)):
+    """
+    Upload a document for context. Creates a thread and attaches the document.
+    Returns thread_id to be used with interpret endpoint.
+    """
+    logger.info(f"[Documents] Uploading file: {file.filename}")
+    
+    if not settings.backboard_api_key:
+        raise HTTPException(status_code=500, detail="Backboard API not configured")
+    
+    headers = {
+        "X-API-Key": settings.backboard_api_key,
+    }
+    
+    try:
+        # First create an assistant
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{settings.backboard_base_url}/assistants",
+                headers={**headers, "Content-Type": "application/json"},
+                json={"name": "Document Context Assistant", "system_prompt": "You help interpret project requirements."}
+            )
+            if resp.status_code not in (200, 201):
+                raise HTTPException(status_code=500, detail=f"Failed to create assistant: {resp.text}")
+            assistant_id = resp.json().get("assistant_id") or resp.json().get("id")
+        
+        # Create a thread
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{settings.backboard_base_url}/assistants/{assistant_id}/threads",
+                headers={**headers, "Content-Type": "application/json"},
+                json={}
+            )
+            if resp.status_code not in (200, 201):
+                raise HTTPException(status_code=500, detail=f"Failed to create thread: {resp.text}")
+            thread_id = resp.json().get("thread_id") or resp.json().get("id")
+        
+        # Upload document to thread
+        file_content = await file.read()
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{settings.backboard_base_url}/threads/{thread_id}/documents",
+                headers=headers,
+                files={"file": (file.filename, file_content, file.content_type or "application/octet-stream")}
+            )
+            if resp.status_code not in (200, 201):
+                logger.error(f"[Documents] Upload failed: {resp.text}")
+                raise HTTPException(status_code=500, detail=f"Failed to upload document: {resp.text}")
+        
+        logger.info(f"[Documents] Uploaded {file.filename} to thread {thread_id}")
+        
+        return {
+            "thread_id": thread_id,
+            "filename": file.filename,
+            "status": "uploaded"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Documents] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
