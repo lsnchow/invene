@@ -1,8 +1,9 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, clipboard, Tray, Menu, nativeImage, screen } from 'electron';
+import { app, BrowserWindow, globalShortcut, ipcMain, clipboard, Tray, Menu, nativeImage, screen, shell } from 'electron';
 import * as path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import Store from 'electron-store';
 import { initRemoteJobListener } from './remoteJobListener';
+import { initRalphRunner, cleanupRalphProcesses } from './ralphRunner';
 
 const store = new Store();
 let mainWindow: BrowserWindow | null = null;
@@ -144,6 +145,11 @@ function registerGlobalShortcut(): void {
 
 // IPC Handlers
 function setupIpcHandlers(): void {
+  // Open URL in system browser
+  ipcMain.handle('shell:open-external', async (_event, url: string) => {
+    await shell.openExternal(url);
+  });
+  
   // Clipboard operations
   ipcMain.handle('clipboard:read', () => {
     return clipboard.readText();
@@ -241,6 +247,7 @@ app.whenReady().then(() => {
   // Initialize remote job listener for Web Orchestrator
   if (mainWindow) {
     initRemoteJobListener(mainWindow);
+    initRalphRunner(mainWindow);
   }
   
   if (!isDev) {
@@ -263,4 +270,5 @@ app.on('activate', () => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   stopBackend();
+  cleanupRalphProcesses();
 });

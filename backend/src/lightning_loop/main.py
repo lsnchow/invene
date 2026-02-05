@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from lightning_loop.api.routes import loop, health, pipeline, ralph, relay, graph, documents
+from lightning_loop.api.routes import loop, health, pipeline, ralph, relay, graph, documents, jobs
 from lightning_loop.core.config import settings
 
 app = FastAPI(
@@ -28,6 +28,7 @@ app.include_router(ralph.router, prefix="/api/ralph", tags=["ralph"])
 app.include_router(relay.router, prefix="/api", tags=["relay"])
 app.include_router(graph.router, prefix="/api", tags=["graph"])
 app.include_router(documents.router, prefix="/api", tags=["documents"])
+app.include_router(jobs.router, prefix="/api", tags=["jobs"])
 
 
 @app.on_event("startup")

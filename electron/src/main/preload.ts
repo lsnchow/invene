@@ -3,6 +3,9 @@ import { contextBridge, ipcRenderer } from 'electron';
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
+  // Open URL in system browser
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:open-external', url),
+  
   // Clipboard
   clipboard: {
     read: (): Promise<string> => ipcRenderer.invoke('clipboard:read'),
@@ -57,10 +60,45 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('remote-job:failed', (_event, data) => callback(data));
     },
   },
+  
+  // Ralph Loop execution
+  ralph: {
+    start: (job: { job_id: string; title: string; objective: string; scope_included?: string[]; scope_excluded?: string[]; constraints?: string[]; success_criteria?: string[]; verification_commands?: string[]; estimated_iterations?: number }): Promise<{ success: boolean; job_id: string; error?: string }> =>
+      ipcRenderer.invoke('ralph:start', job),
+    stop: (jobId: string): Promise<{ success: boolean; job_id: string; error?: string }> =>
+      ipcRenderer.invoke('ralph:stop', jobId),
+    getStatus: (): Promise<Array<{ job_id: string; status: string }>> =>
+      ipcRenderer.invoke('ralph:status'),
+    onEvent: (callback: (event: { type: string; job_id: string; data: Record<string, unknown> }) => void) => {
+      ipcRenderer.on('ralph:event', (_event, data) => callback(data));
+    },
+    removeEventListener: () => {
+      ipcRenderer.removeAllListeners('ralph:event');
+    },
+  },
 });
 
 // Type definitions for renderer
+export interface RalphJobSpec {
+  job_id: string;
+  title: string;
+  objective: string;
+  scope_included?: string[];
+  scope_excluded?: string[];
+  constraints?: string[];
+  success_criteria?: string[];
+  verification_commands?: string[];
+  estimated_iterations?: number;
+}
+
+export interface RalphEvent {
+  type: 'started' | 'iteration' | 'action' | 'decision' | 'completed' | 'error' | 'log' | 'result';
+  job_id: string;
+  data: Record<string, unknown>;
+}
+
 export interface ElectronAPI {
+  openExternal: (url: string) => Promise<void>;
   clipboard: {
     read: () => Promise<string>;
     write: (text: string) => Promise<boolean>;
@@ -88,6 +126,13 @@ export interface ElectronAPI {
     onNodeComplete: (callback: (data: any) => void) => void;
     onJobCompleted: (callback: (data: any) => void) => void;
     onJobFailed: (callback: (data: any) => void) => void;
+  };
+  ralph: {
+    start: (job: RalphJobSpec) => Promise<{ success: boolean; job_id: string; error?: string }>;
+    stop: (jobId: string) => Promise<{ success: boolean; job_id: string; error?: string }>;
+    getStatus: () => Promise<Array<{ job_id: string; status: string }>>;
+    onEvent: (callback: (event: RalphEvent) => void) => void;
+    removeEventListener: () => void;
   };
 }
 
