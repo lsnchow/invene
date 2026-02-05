@@ -37,6 +37,22 @@ interface ModelOption {
   id: string;
   name: string;
   provider: string;
+  context_limit?: number;
+  supports_tools?: boolean;
+}
+
+interface ConversationStep {
+  step_id: string;
+  type: 'user_input' | 'system_prompt' | 'prompt' | 'ai_response' | 'parsing' | 'error' | 'fallback' | 'result';
+  title: string;
+  content: string;
+  timestamp: string;
+  model?: string;
+  tokens?: number;
+}
+
+interface InterpretResult extends JobStack {
+  conversation: ConversationStep[];
 }
 
 async function fetchModels(): Promise<ModelOption[]> {
@@ -64,7 +80,7 @@ async function interpretRequest(
   verbosity: 'low' | 'medium' | 'high' = 'medium',
   model?: string,
   threadId?: string
-): Promise<JobStack> {
+): Promise<InterpretResult> {
   const response = await fetch(`${API_BASE}/api/jobs/interpret`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -359,6 +375,10 @@ export function JobStackView({ initialPrompt = '' }: JobStackViewProps) {
   const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; threadId: string }>>([]);
   const [isUploading, setIsUploading] = useState(false);
   
+  // Conversation transparency
+  const [conversation, setConversation] = useState<ConversationStep[]>([]);
+  const [showConversation, setShowConversation] = useState(false);
+  
   // Load available models on mount
   useEffect(() => {
     fetchModels().then(setModels);
@@ -405,6 +425,10 @@ export function JobStackView({ initialPrompt = '' }: JobStackViewProps) {
       const threadId = uploadedFiles.length > 0 ? uploadedFiles[uploadedFiles.length - 1].threadId : undefined;
       const result = await interpretRequest(prompt, verbosity, selectedModel || undefined, threadId);
       setJobStack(result);
+      // Save conversation for transparency view
+      if (result.conversation) {
+        setConversation(result.conversation);
+      }
       if (result.jobs.length > 0) {
         setExpandedJob(result.jobs[0].job_id);
       }
@@ -624,13 +648,75 @@ export function JobStackView({ initialPrompt = '' }: JobStackViewProps) {
             {jobStack.total_jobs} jobs • Click to expand & edit
           </p>
         </div>
-        <button
-          onClick={() => setJobStack(null)}
-          className="text-xs text-white/40 hover:text-white/60"
-        >
-          Start Over
-        </button>
+        <div className="flex items-center gap-2">
+          {conversation.length > 0 && (
+            <button
+              onClick={() => setShowConversation(!showConversation)}
+              className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                showConversation
+                  ? 'bg-blue-500/20 text-blue-400'
+                  : 'text-white/40 hover:text-white/60'
+              }`}
+            >
+              {showConversation ? '◀ Hide AI Flow' : '▶ Show AI Flow'}
+            </button>
+          )}
+          <button
+            onClick={() => { setJobStack(null); setConversation([]); setShowConversation(false); }}
+            className="text-xs text-white/40 hover:text-white/60"
+          >
+            Start Over
+          </button>
+        </div>
       </div>
+      
+      {/* Conversation Flow (Transparency) */}
+      {showConversation && conversation.length > 0 && (
+        <div className="p-4 bg-white/5 rounded-lg border border-white/10 space-y-3">
+          <h3 className="text-sm font-medium text-white/80 flex items-center gap-2">
+            <span className="text-blue-400">🔍</span> AI Conversation Flow
+          </h3>
+          <div className="space-y-2">
+            {conversation.map((step, i) => (
+              <div key={step.step_id} className="flex gap-3">
+                {/* Step indicator */}
+                <div className="flex flex-col items-center">
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
+                    step.type === 'user_input' ? 'bg-green-500/20 text-green-400' :
+                    step.type === 'ai_response' ? 'bg-purple-500/20 text-purple-400' :
+                    step.type === 'error' ? 'bg-red-500/20 text-red-400' :
+                    step.type === 'result' ? 'bg-blue-500/20 text-blue-400' :
+                    'bg-white/10 text-white/50'
+                  }`}>
+                    {i + 1}
+                  </div>
+                  {i < conversation.length - 1 && (
+                    <div className="w-px h-full bg-white/10 min-h-[20px]" />
+                  )}
+                </div>
+                {/* Step content */}
+                <div className="flex-1 pb-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs font-medium text-white/70">{step.title}</span>
+                    {step.model && (
+                      <span className="text-[10px] px-1.5 py-0.5 bg-white/10 rounded text-white/40">
+                        {step.model}
+                      </span>
+                    )}
+                  </div>
+                  <div className={`text-xs p-2 rounded max-h-32 overflow-y-auto ${
+                    step.type === 'ai_response' ? 'bg-purple-500/10 text-purple-200' :
+                    step.type === 'error' ? 'bg-red-500/10 text-red-300' :
+                    'bg-white/5 text-white/60'
+                  }`}>
+                    <pre className="whitespace-pre-wrap font-mono">{step.content}</pre>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       
       {/* Original request */}
       <div className="p-3 bg-white/5 rounded-lg border border-white/10">

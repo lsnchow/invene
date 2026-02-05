@@ -77,12 +77,25 @@ class InterpretRequest(BaseModel):
     thread_id: Optional[str] = None  # Thread with uploaded documents
 
 
+class ConversationStep(BaseModel):
+    """A single step in the AI conversation for transparency."""
+    step_id: str
+    type: str  # 'user_input', 'system_prompt', 'ai_response', 'parsing'
+    title: str
+    content: str
+    timestamp: str
+    model: Optional[str] = None
+    tokens: Optional[int] = None
+
+
 class InterpretResponse(BaseModel):
     """Response containing the generated JobStack."""
     stack_id: str
     jobs: List[JobSpec]
     execution_order: List[str]
     total_jobs: int
+    # Transparency: show the full conversation
+    conversation: List[ConversationStep] = Field(default_factory=list)
 
 
 class ExecuteRequest(BaseModel):
@@ -166,6 +179,26 @@ async def interpret_request(request: InterpretRequest):
     """
     logger.info(f"[JobInterpreter] Interpreting request: {request.user_request[:50]}...")
     
+    # Conversation trace for transparency
+    conversation: List[ConversationStep] = []
+    step_counter = 0
+    
+    def add_step(step_type: str, title: str, content: str, model: str = None, tokens: int = None):
+        nonlocal step_counter
+        step_counter += 1
+        conversation.append(ConversationStep(
+            step_id=f"step-{step_counter:03d}",
+            type=step_type,
+            title=title,
+            content=content,
+            timestamp=datetime.now().isoformat(),
+            model=model,
+            tokens=tokens,
+        ))
+    
+    # Step 1: User input
+    add_step("user_input", "Your Request", request.user_request)
+    
     # Build project context string
     ctx = request.project_context
     if ctx:
@@ -186,24 +219,47 @@ async def interpret_request(request: InterpretRequest):
         verbosity=request.verbosity,
     )
     
+    # Step 2: System prompt
+    system_prompt = "You are a precise job decomposition engine. Output only valid JSON."
+    add_step("system_prompt", "System Instructions", system_prompt)
+    
+    # Step 3: Full prompt sent to AI
+    add_step("prompt", "Prompt to AI", prompt[:2000] + ("..." if len(prompt) > 2000 else ""))
+    
+    response = None
+    used_model = request.model or "default"
+    
     try:
         # Call Backboard for interpretation
         logger.info("[JobInterpreter] Calling Backboard LLM...")
-        logger.info(f"[JobInterpreter] Using model: {request.model or 'default'}")
+        logger.info(f"[JobInterpreter] Using model: {used_model}")
         response = await backboard.one_shot(
             prompt=prompt,
-            system_prompt="You are a precise job decomposition engine. Output only valid JSON.",
+            system_prompt=system_prompt,
             model=request.model,
         )
         
         logger.info(f"[JobInterpreter] Got response: {response[:200]}...")
         
+        # Step 4: AI response
+        add_step("ai_response", "AI Response", response, model=used_model)
+        
         # Parse the JSON response
         jobs_data = _parse_jobs_json(response)
         
+        # Step 5: Parsing result
+        add_step("parsing", "Parsed Jobs", f"Successfully parsed {len(jobs_data)} jobs from AI response")
+        
     except Exception as e:
         logger.warning(f"[JobInterpreter] Backboard failed: {e}, using fallback")
+        
+        # Step 4b: Error
+        add_step("error", "AI Error", f"Backboard call failed: {str(e)}")
+        
         jobs_data = _fallback_job_interpretation(request.user_request, request.verbosity)
+        
+        # Step 5b: Fallback
+        add_step("fallback", "Fallback Parser", f"Used regex fallback to extract {len(jobs_data)} jobs")
     
     # Generate stack
     stack_id = str(uuid.uuid4())
@@ -241,11 +297,15 @@ async def interpret_request(request: InterpretRequest):
     
     logger.info(f"[JobInterpreter] Created {len(jobs)} jobs")
     
+    # Step 6: Final result
+    add_step("result", "Job Stack Created", f"Created stack {stack_id} with {len(jobs)} jobs")
+    
     return InterpretResponse(
         stack_id=stack_id,
         jobs=jobs,
         execution_order=execution_order,
         total_jobs=len(jobs),
+        conversation=conversation,
     )
 
 
@@ -485,8 +545,11 @@ async def get_confirmed_jobs():
 # Models API
 # ============================================================================
 
-# Curated list of good models for job interpretation
-AVAILABLE_MODELS = [
+# Cache for models (refresh every hour)
+_models_cache: Dict[str, Any] = {"models": [], "fetched_at": None}
+
+# Fallback models if API fails
+FALLBACK_MODELS = [
     {"id": "anthropic/claude-sonnet-4-20250514", "name": "Claude Sonnet 4", "provider": "anthropic"},
     {"id": "anthropic/claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "provider": "anthropic"},
     {"id": "openai/gpt-4o", "name": "GPT-4o", "provider": "openai"},
@@ -498,8 +561,53 @@ AVAILABLE_MODELS = [
 
 @router.get("/models")
 async def get_models():
-    """Get available models for job interpretation."""
-    return {"models": AVAILABLE_MODELS}
+    """Get available models from Backboard API."""
+    global _models_cache
+    
+    # Check cache (1 hour TTL)
+    if _models_cache["fetched_at"]:
+        age = (datetime.now() - datetime.fromisoformat(_models_cache["fetched_at"])).seconds
+        if age < 3600 and _models_cache["models"]:
+            return {"models": _models_cache["models"], "source": "cache"}
+    
+    # Fetch from Backboard
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{settings.backboard_base_url}/models",
+                headers={"X-API-Key": settings.backboard_api_key},
+                params={"model_type": "llm", "limit": 50}
+            )
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                raw_models = data.get("models", [])
+                
+                # Transform to our format
+                models = []
+                for m in raw_models:
+                    models.append({
+                        "id": f"{m['provider']}/{m['name']}",
+                        "name": m["name"],
+                        "provider": m["provider"],
+                        "context_limit": m.get("context_limit"),
+                        "supports_tools": m.get("supports_tools", False),
+                    })
+                
+                # Update cache
+                _models_cache = {
+                    "models": models,
+                    "fetched_at": datetime.now().isoformat()
+                }
+                
+                logger.info(f"[Models] Fetched {len(models)} models from Backboard")
+                return {"models": models, "source": "backboard"}
+                
+    except Exception as e:
+        logger.warning(f"[Models] Failed to fetch from Backboard: {e}")
+    
+    # Fallback to hardcoded list
+    return {"models": FALLBACK_MODELS, "source": "fallback"}
 
 
 # ============================================================================
