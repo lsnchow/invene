@@ -1,30 +1,48 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --bg-primary: #0f0f0f;
-  --bg-secondary: #1a1a1a;
-  --bg-tertiary: #252525;
+  --bg-primary: #000000;
+  --bg-secondary: #0a0a0a;
+  --bg-tertiary: #111111;
   --text-primary: #ffffff;
-  --text-secondary: #a0a0a0;
-  --accent: #fbbf24;
-  --accent-dim: #92400e;
+  --text-secondary: #888888;
+  --accent: #ffffff;
+  --accent-dim: #444444;
+}
+
+* {
+  font-family: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
+  letter-spacing: 0.01em;
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
   background: transparent;
+  letter-spacing: 0.01em;
 }
 
 .glass {
-  background: rgba(15, 15, 15, 0.95);
-  backdrop-filter: blur(20px);
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
   border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.glass-subtle {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .scrollbar-thin::-webkit-scrollbar {
-  width: 6px;
+  width: 4px;
 }
 
 .scrollbar-thin::-webkit-scrollbar-track {
@@ -32,10 +50,65 @@ body {
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Node styling */
+.node {
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.node-pending {
+  opacity: 0.5;
+}
+
+.node-running {
+  border-color: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.03);
+}
+
+.node-completed {
+  border-color: rgba(100, 200, 100, 0.2);
+  background: rgba(100, 200, 100, 0.03);
+}
+
+.node-failed {
+  border-color: rgba(255, 100, 100, 0.2);
+  background: rgba(255, 100, 100, 0.03);
+}
+
+.node-status-pending {
+  color: rgba(255, 255, 255, 0.2);
+  font-size: 8px;
+}
+
+.node-status-running {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 8px;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.node-status-completed {
+  color: rgba(100, 200, 100, 0.7);
+  font-size: 8px;
+}
+
+.node-status-failed {
+  color: rgba(255, 100, 100, 0.7);
+  font-size: 10px;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
 }

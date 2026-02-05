@@ -1,6 +1,7 @@
 """Application configuration."""
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from pathlib import Path
 
 
 class Settings(BaseSettings):
@@ -21,8 +22,10 @@ class Settings(BaseSettings):
     memory_max_successes: int = 50
     
     class Config:
-        env_file = ".env"
+        # Look for .env in project root (3 levels up from this file)
+        env_file = str(Path(__file__).parent.parent.parent.parent.parent / ".env")
         env_file_encoding = "utf-8"
+        extra = "ignore"
 
 
 @lru_cache

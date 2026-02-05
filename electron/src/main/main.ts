@@ -1,7 +1,8 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, clipboard, Tray, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, globalShortcut, ipcMain, clipboard, Tray, Menu, nativeImage, screen } from 'electron';
 import * as path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import Store from 'electron-store';
+import { initRemoteJobListener } from './remoteJobListener';
 
 const store = new Store();
 let mainWindow: BrowserWindow | null = null;
@@ -12,14 +13,28 @@ const BACKEND_PORT = 8811;
 const isDev = process.env.NODE_ENV !== 'production';
 
 function createWindow(): void {
+  // Get primary display dimensions
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width: screenWidth } = primaryDisplay.workAreaSize;
+  
+  const windowWidth = 320;
+  const windowHeight = 240;
+  
+  // Position: top center of screen
+  const x = Math.round((screenWidth - windowWidth) / 2);
+  const y = 40; // Just below menu bar
+
   mainWindow = new BrowserWindow({
-    width: 480,
-    height: 720,
+    width: windowWidth,
+    height: windowHeight,
+    x,
+    y,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
     resizable: true,
-    skipTaskbar: false,
+    skipTaskbar: true,
+    show: false, // Start hidden
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -29,14 +44,30 @@ function createWindow(): void {
 
   // Load renderer
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
+    mainWindow.loadURL('http://localhost:5174');
+    // mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   }
 
+  mainWindow.once('ready-to-show', () => {
+    console.log('[Invene] Window ready, showing UI');
+    mainWindow?.show();
+    mainWindow?.focus();
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+  
+  // Re-center when shown
+  mainWindow.on('show', () => {
+    const display = screen.getPrimaryDisplay();
+    const { width: sw } = display.workAreaSize;
+    const bounds = mainWindow?.getBounds();
+    if (bounds) {
+      mainWindow?.setPosition(Math.round((sw - bounds.width) / 2), 40);
+    }
   });
 }
 
@@ -48,13 +79,13 @@ function createTray(): void {
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
   
   const contextMenu = Menu.buildFromTemplate([
-    { label: 'Show Lightning Loop', click: () => mainWindow?.show() },
+    { label: 'Show Invene', click: () => mainWindow?.show() },
     { label: 'Hide', click: () => mainWindow?.hide() },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]);
 
-  tray.setToolTip('Lightning Loop');
+  tray.setToolTip('Invene');
   tray.setContextMenu(contextMenu);
   
   tray.on('click', () => {
@@ -123,9 +154,9 @@ function setupIpcHandlers(): void {
     return true;
   });
 
-  // Paste to VS Code / Cursor
-  ipcMain.handle('automation:paste-to-editor', async (_event, editorType: 'vscode' | 'cursor') => {
-    return await pasteToEditor(editorType);
+  // Write PRD to file and open in VS Code / Cursor
+  ipcMain.handle('automation:open-prd-in-editor', async (_event, content: string, editorType: 'vscode' | 'cursor') => {
+    return await openPrdInEditor(content, editorType);
   });
 
   // Backend API proxy
@@ -160,50 +191,44 @@ function setupIpcHandlers(): void {
   });
 }
 
-async function pasteToEditor(editorType: 'vscode' | 'cursor'): Promise<boolean> {
+async function openPrdInEditor(content: string, editorType: 'vscode' | 'cursor'): Promise<{ success: boolean; filePath?: string; error?: string }> {
+  const fs = await import('fs');
+  const os = await import('os');
   const { exec } = await import('child_process');
   
-  // macOS: Use AppleScript to focus and paste
-  if (process.platform === 'darwin') {
-    const appName = editorType === 'vscode' ? 'Visual Studio Code' : 'Cursor';
-    const script = `
-      tell application "${appName}"
-        activate
-      end tell
-      delay 0.3
-      tell application "System Events"
-        keystroke "v" using command down
-      end tell
-    `;
+  try {
+    // Create PRD file with timestamp
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const fileName = `PRD-${timestamp}.md`;
+    const prdDir = path.join(os.homedir(), 'Documents', 'Invene', 'PRDs');
+    
+    // Ensure directory exists
+    fs.mkdirSync(prdDir, { recursive: true });
+    
+    const filePath = path.join(prdDir, fileName);
+    
+    // Write the PRD content
+    fs.writeFileSync(filePath, content, 'utf-8');
+    console.log(`[Invene] PRD written to: ${filePath}`);
+    
+    // Open in editor using CLI
+    const cliCommand = editorType === 'vscode' ? 'code' : 'cursor';
     
     return new Promise((resolve) => {
-      exec(`osascript -e '${script}'`, (error) => {
-        resolve(!error);
+      exec(`${cliCommand} "${filePath}"`, (error) => {
+        if (error) {
+          console.error(`[Invene] Failed to open in ${editorType}:`, error);
+          resolve({ success: false, filePath, error: error.message });
+        } else {
+          console.log(`[Invene] Opened PRD in ${editorType}`);
+          resolve({ success: true, filePath });
+        }
       });
     });
+  } catch (error) {
+    console.error('[Invene] Failed to write PRD:', error);
+    return { success: false, error: String(error) };
   }
-  
-  // Windows: Use PowerShell
-  if (process.platform === 'win32') {
-    const processName = editorType === 'vscode' ? 'Code' : 'Cursor';
-    const script = `
-      Add-Type -AssemblyName Microsoft.VisualBasic
-      $process = Get-Process -Name "${processName}" -ErrorAction SilentlyContinue | Select-Object -First 1
-      if ($process) {
-        [Microsoft.VisualBasic.Interaction]::AppActivate($process.Id)
-        Start-Sleep -Milliseconds 300
-        [System.Windows.Forms.SendKeys]::SendWait("^v")
-      }
-    `;
-    
-    return new Promise((resolve) => {
-      exec(`powershell -Command "${script}"`, (error) => {
-        resolve(!error);
-      });
-    });
-  }
-
-  return false;
 }
 
 // App lifecycle
@@ -212,6 +237,11 @@ app.whenReady().then(() => {
   createTray();
   registerGlobalShortcut();
   setupIpcHandlers();
+  
+  // Initialize remote job listener for Web Orchestrator
+  if (mainWindow) {
+    initRemoteJobListener(mainWindow);
+  }
   
   if (!isDev) {
     startBackend();

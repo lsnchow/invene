@@ -1,7 +1,7 @@
 {
-  "name": "lightning-loop-electron",
+  "name": "invene",
   "version": "0.1.0",
-  "description": "Lightning Loop Electron App",
+  "description": "Invene - Autonomous Copilot Runner",
   "main": "dist/main.js",
   "scripts": {
     "dev": "concurrently \"npm run dev:main\" \"npm run dev:renderer\"",
@@ -33,8 +33,8 @@
     "zustand": "^4.4.7"
   },
   "build": {
-    "appId": "com.lightningloop.app",
-    "productName": "Lightning Loop",
+    "appId": "com.invene.app",
+    "productName": "Invene",
     "files": [
       "dist/**/*",
       "package.json"
