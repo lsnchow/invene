@@ -1,5 +1,7 @@
 # Lightning Loop ⚡
 
+guys why do i keep running it back
+
 Local stateful debug loop with memory for coding agents. Shorten debug cycles, persist context across iterations, and generate optimized prompts for VS Code/Cursor.
 
 ## Quick Start
